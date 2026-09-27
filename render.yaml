@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: veracraft-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --workers 1 --threads 8 --timeout 30 --bind 0.0.0.0:$PORT server:app
+    healthCheckPath: /v1/healthz
+    envVars:
+      - key: VERA_TEAM_NAME
+        sync: false
+      - key: VERA_CANDIDATE_NAME
+        sync: false
+      - key: VERA_CONTACT_EMAIL
+        sync: false
