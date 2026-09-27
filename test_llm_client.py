@@ -1,8 +1,10 @@
 """Offline tests for structured Gemini requests and reply integration."""
 
 import json
+from io import BytesIO
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from context_store import ContextStore
 from conversation_manager import ConversationManager
@@ -43,6 +45,22 @@ class _ReplyModel:
 
 
 class GeminiClientTests(unittest.TestCase):
+    def test_provider_http_error_includes_google_diagnostic(self):
+        client = GeminiClient(api_key="test-key")
+        provider_error = HTTPError(
+            "https://generativelanguage.googleapis.com/",
+            503,
+            "Service Unavailable",
+            {},
+            BytesIO(b'{"error":{"status":"UNAVAILABLE","message":"The model is overloaded."}}'),
+        )
+        with patch("llm_client.urlopen", side_effect=provider_error):
+            with self.assertRaisesRegex(
+                ModelError,
+                r"HTTP 503 \(UNAVAILABLE\): The model is overloaded",
+            ):
+                client._generate_json({"task": "test"}, {})
+
     def test_tick_uses_model_composer_when_configured(self):
         server.store.clear_all()
         server.store.store_context("category", "dentists", 1, {"slug": "dentists"})

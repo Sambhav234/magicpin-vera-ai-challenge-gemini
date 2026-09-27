@@ -168,7 +168,22 @@ class GeminiClient:
             with urlopen(request, timeout=timeout) as response:
                 response_data = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
-            raise ModelError(f"Gemini request failed with HTTP {error.code}.") from error
+            provider_status = ""
+            provider_message = ""
+            try:
+                error_data = json.loads(error.read(4096).decode("utf-8"))
+                details = error_data.get("error", {})
+                if isinstance(details, dict):
+                    provider_status = details.get("status", "")
+                    provider_message = details.get("message", "")
+            except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+                pass
+            diagnostic = f"Gemini request failed with HTTP {error.code}"
+            if isinstance(provider_status, str) and provider_status:
+                diagnostic += f" ({provider_status[:80]})"
+            if isinstance(provider_message, str) and provider_message:
+                diagnostic += f": {provider_message[:300]}"
+            raise ModelError(diagnostic + ".") from error
         except (URLError, TimeoutError, OSError) as error:
             raise ModelError("Gemini request failed or timed out.") from error
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
