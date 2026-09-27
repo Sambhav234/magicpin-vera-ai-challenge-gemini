@@ -1,4 +1,4 @@
-"""Offline tests for structured Gemini requests and reply integration."""
+"""Offline tests for structured Groq requests and reply integration."""
 
 import json
 from io import BytesIO
@@ -8,7 +8,7 @@ from urllib.error import HTTPError
 
 from context_store import ContextStore
 from conversation_manager import ConversationManager
-from llm_client import GeminiClient, ModelError
+from llm_client import GroqClient, ModelError
 import server
 
 
@@ -24,11 +24,9 @@ class _Response:
 
     def read(self):
         return json.dumps({
-            "candidates": [{
-                "content": {
-                    "parts": [{"text": json.dumps(self.result)}]
-                }
-            }]
+            "choices": [{
+                "message": {"content": json.dumps(self.result)}
+            }],
         }).encode("utf-8")
 
 
@@ -44,11 +42,11 @@ class _ReplyModel:
         return self.result
 
 
-class GeminiClientTests(unittest.TestCase):
-    def test_provider_http_error_includes_google_diagnostic(self):
-        client = GeminiClient(api_key="test-key")
+class GroqClientTests(unittest.TestCase):
+    def test_provider_http_error_includes_groq_diagnostic(self):
+        client = GroqClient(api_key="test-key")
         provider_error = HTTPError(
-            "https://generativelanguage.googleapis.com/",
+            "https://api.groq.com/openai/v1/chat/completions",
             503,
             "Service Unavailable",
             {},
@@ -57,7 +55,7 @@ class GeminiClientTests(unittest.TestCase):
         with patch("llm_client.urlopen", side_effect=provider_error):
             with self.assertRaisesRegex(
                 ModelError,
-                r"HTTP 503 \(UNAVAILABLE\): The model is overloaded",
+                r"Groq request failed with HTTP 503 \(UNAVAILABLE\): The model is overloaded",
             ):
                 client._generate_json({"task": "test"}, {})
 
@@ -98,7 +96,7 @@ class GeminiClientTests(unittest.TestCase):
         compose.assert_called_once()
 
     def test_structured_request_hides_key_and_redacts_customer_context(self):
-        client = GeminiClient(api_key="not-a-real-key", model="gemini-test")
+        client = GroqClient(api_key="not-a-real-key", model="openai/gpt-oss-20b")
         result = {
             "body": "Hello, your Dental Cleaning @ ₹299 is due. Reply YES to arrange a visit.",
             "cta": "binary",
@@ -125,9 +123,13 @@ class GeminiClientTests(unittest.TestCase):
 
         request = mocked_urlopen.call_args.args[0]
         self.assertNotIn("not-a-real-key", request.full_url)
-        self.assertEqual(request.get_header("X-goog-api-key"), "not-a-real-key")
+        self.assertEqual(request.get_header("Authorization"), "Bearer not-a-real-key")
         sent_body = json.loads(request.data.decode("utf-8"))
-        sent_text = sent_body["contents"][0]["parts"][0]["text"]
+        self.assertEqual(request.full_url, "https://api.groq.com/openai/v1/chat/completions")
+        self.assertEqual(sent_body["model"], "openai/gpt-oss-20b")
+        self.assertEqual(sent_body["response_format"]["type"], "json_schema")
+        self.assertTrue(sent_body["response_format"]["json_schema"]["strict"])
+        sent_text = sent_body["messages"][1]["content"]
         self.assertNotIn("customer-private", sent_text)
         self.assertNotIn("98765", sent_text)
         self.assertEqual(composed["body"], result["body"])
@@ -135,7 +137,7 @@ class GeminiClientTests(unittest.TestCase):
         self.assertEqual(composed["suppression_key"], draft["suppression_key"])
 
     def test_composition_rejects_unreferenced_numeric_claim(self):
-        client = GeminiClient(api_key="test-key")
+        client = GroqClient(api_key="test-key")
         result = {
             "body": "Your profile received 999 new calls.",
             "cta": "binary",
@@ -177,7 +179,7 @@ class GeminiClientTests(unittest.TestCase):
         self.assertEqual(len(model.calls), 1)
 
     def test_wait_requires_a_bounded_delay(self):
-        client = GeminiClient(api_key="test-key")
+        client = GroqClient(api_key="test-key")
         result = {
             "action": "wait",
             "body": "",

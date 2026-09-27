@@ -23,7 +23,7 @@ from flask import Flask, request, jsonify
 from context_store import ContextStore
 from conversation_manager import ConversationManager
 from bot import compose
-from llm_client import GeminiClient, ModelError
+from llm_client import GroqClient, ModelError
 
 # Configure logging
 logging.basicConfig(
@@ -36,7 +36,7 @@ app = Flask(__name__)
 
 # Singletons
 store = ContextStore()
-llm_client = GeminiClient()
+llm_client = GroqClient()
 conv_manager = ConversationManager(store, llm_client)
 
 # Metadata configuration
@@ -45,7 +45,7 @@ METADATA = {
     "team_members": [os.environ.get("VERA_CANDIDATE_NAME", "Sambhav Mishra")],
     "model": llm_client.model if llm_client.enabled else "hybrid-template-vera",
     "approach": (
-        "Gemini structured generation grounded in four contexts with deterministic consent, "
+        "Groq structured generation grounded in four contexts with deterministic consent, "
         "routing, and conversation safety checks"
         if llm_client.enabled else
         "Deterministic four-context composition with adaptive multi-turn conversation routing"
@@ -205,7 +205,7 @@ def tick():
                     timeout_seconds=min(llm_client.timeout_seconds, remaining),
                 )
             except ModelError as error:
-                logger.warning("Gemini composition failed for trigger %s: %s", tid, error)
+                logger.warning("Groq composition failed for trigger %s: %s", tid, error)
                 continue
         conv_id = f"conv_{uuid.uuid4().hex}"
 
@@ -286,7 +286,7 @@ def reply():
             turn_number=turn_number
         )
     except ModelError as error:
-        logger.warning("Gemini reply generation failed for conversation %s: %s", conv_id, error)
+        logger.warning("Groq reply generation failed for conversation %s: %s", conv_id, error)
         return jsonify({"error": "model_unavailable", "detail": str(error)}), 503
 
     return jsonify(result), 200

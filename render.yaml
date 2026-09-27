@@ -13,7 +13,7 @@ services:
         sync: false
       - key: VERA_CONTACT_EMAIL
         sync: false
-      - key: GEMINI_API_KEY
+      - key: GROQ_API_KEY
         sync: false
-      - key: GEMINI_MODEL
-        value: gemini-3.8-flash
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b

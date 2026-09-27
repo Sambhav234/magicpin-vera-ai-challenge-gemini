@@ -1,11 +1,10 @@
-"""Gemini-backed, structured message and reply generation."""
+"""Groq-backed, structured message and reply generation."""
 
 import json
 import os
 import re
 from typing import Any, Dict, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
@@ -14,25 +13,27 @@ class ModelError(RuntimeError):
 
 
 _COMPOSITION_SCHEMA = {
-    "type": "OBJECT",
+    "type": "object",
     "properties": {
-        "body": {"type": "STRING"},
-        "cta": {"type": "STRING", "enum": ["binary", "open_ended", "none"]},
-        "rationale": {"type": "STRING"},
+        "body": {"type": "string"},
+        "cta": {"type": "string", "enum": ["binary", "open_ended", "none"]},
+        "rationale": {"type": "string"},
     },
     "required": ["body", "cta", "rationale"],
+    "additionalProperties": False,
 }
 
 _REPLY_SCHEMA = {
-    "type": "OBJECT",
+    "type": "object",
     "properties": {
-        "action": {"type": "STRING", "enum": ["send", "wait", "end"]},
-        "body": {"type": "STRING"},
-        "cta": {"type": "STRING", "enum": ["binary", "open_ended", "none"]},
-        "wait_seconds": {"type": "INTEGER"},
-        "rationale": {"type": "STRING"},
+        "action": {"type": "string", "enum": ["send", "wait", "end"]},
+        "body": {"type": "string"},
+        "cta": {"type": "string", "enum": ["binary", "open_ended", "none"]},
+        "wait_seconds": {"type": "integer"},
+        "rationale": {"type": "string"},
     },
-    "required": ["action", "body", "cta", "rationale"],
+    "required": ["action", "body", "cta", "wait_seconds", "rationale"],
+    "additionalProperties": False,
 }
 
 _SENSITIVE_KEYS = {
@@ -111,16 +112,16 @@ def _numbers(value: Any) -> set[str]:
     return set(re.findall(r"\d+(?:[.,]\d+)?", json.dumps(value, ensure_ascii=False)))
 
 
-class GeminiClient:
+class GroqClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         timeout_seconds: Optional[float] = None,
     ):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
-        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
-        configured_timeout = timeout_seconds or float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "12"))
+        self.api_key = api_key or os.environ.get("GROQ_API_KEY")
+        self.model = model or os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
+        configured_timeout = timeout_seconds or float(os.environ.get("GROQ_TIMEOUT_SECONDS", "12"))
         self.timeout_seconds = min(max(configured_timeout, 1.0), 20.0)
 
     @property
@@ -134,21 +135,27 @@ class GeminiClient:
         timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
         if not self.enabled:
-            raise ModelError("Gemini is not configured.")
+            raise ModelError("Groq is not configured.")
 
-        model = quote(self.model.removeprefix("models/"), safe=".-")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        url = "https://api.groq.com/openai/v1/chat/completions"
         request_body = {
-            "systemInstruction": {"parts": [{"text": _SYSTEM_INSTRUCTION}]},
-            "contents": [{
-                "role": "user",
-                "parts": [{"text": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}],
-            }],
-            "generationConfig": {
-                "temperature": 0.1,
-                "maxOutputTokens": 700,
-                "responseMimeType": "application/json",
-                "responseSchema": schema,
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_INSTRUCTION},
+                {
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                },
+            ],
+            "temperature": 0.1,
+            "max_tokens": 700,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "vera_response",
+                    "strict": True,
+                    "schema": schema,
+                },
             },
         }
         request = Request(
@@ -156,7 +163,7 @@ class GeminiClient:
             data=json.dumps(request_body, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "x-goog-api-key": self.api_key,
+                "Authorization": f"Bearer {self.api_key}",
             },
             method="POST",
         )
@@ -178,28 +185,24 @@ class GeminiClient:
                     provider_message = details.get("message", "")
             except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
                 pass
-            diagnostic = f"Gemini request failed with HTTP {error.code}"
+            diagnostic = f"Groq request failed with HTTP {error.code}"
             if isinstance(provider_status, str) and provider_status:
                 diagnostic += f" ({provider_status[:80]})"
             if isinstance(provider_message, str) and provider_message:
                 diagnostic += f": {provider_message[:300]}"
             raise ModelError(diagnostic + ".") from error
         except (URLError, TimeoutError, OSError) as error:
-            raise ModelError("Gemini request failed or timed out.") from error
+            raise ModelError("Groq request failed or timed out.") from error
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ModelError("Gemini returned an invalid response.") from error
+            raise ModelError("Groq returned an invalid response.") from error
 
         try:
-            text = "".join(
-                part["text"]
-                for part in response_data["candidates"][0]["content"]["parts"]
-                if isinstance(part.get("text"), str)
-            )
+            text = response_data["choices"][0]["message"]["content"]
             result = json.loads(text)
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
-            raise ModelError("Gemini returned no valid structured output.") from error
+            raise ModelError("Groq returned no valid structured output.") from error
         if not isinstance(result, dict):
-            raise ModelError("Gemini structured output was not an object.")
+            raise ModelError("Groq structured output was not an object.")
         return result
 
     def compose_message(
@@ -236,10 +239,10 @@ class GeminiClient:
         if (not isinstance(body, str) or not body.strip() or len(body) > 1200
                 or cta not in {"binary", "open_ended", "none"}
                 or not isinstance(rationale, str) or len(rationale) > 400):
-            raise ModelError("Gemini composition did not match the message contract.")
+            raise ModelError("Groq composition did not match the message contract.")
         allowed_numbers = _numbers(context)
         if _numbers(body) - allowed_numbers:
-            raise ModelError("Gemini composition introduced an unsupported numeric claim.")
+            raise ModelError("Groq composition introduced an unsupported numeric claim.")
         return {
             **grounded_draft,
             "body": body.strip(),
@@ -287,15 +290,15 @@ class GeminiClient:
                 or not isinstance(body, str) or len(body) > 1200
                 or cta not in {"binary", "open_ended", "none"}
                 or not isinstance(rationale, str) or len(rationale) > 400):
-            raise ModelError("Gemini reply did not match the conversation contract.")
+            raise ModelError("Groq reply did not match the conversation contract.")
         if action == "send" and not body.strip():
-            raise ModelError("Gemini selected send without a message body.")
+            raise ModelError("Groq selected send without a message body.")
         if action == "send" and _numbers(body) - _numbers(payload):
-            raise ModelError("Gemini reply introduced an unsupported numeric claim.")
+            raise ModelError("Groq reply introduced an unsupported numeric claim.")
         if action == "wait":
             wait_seconds = result.get("wait_seconds")
             if isinstance(wait_seconds, bool) or not isinstance(wait_seconds, int) or not 60 <= wait_seconds <= 86400:
-                raise ModelError("Gemini selected wait with an invalid delay.")
+                raise ModelError("Groq selected wait with an invalid delay.")
         response = {
             "action": action,
             "rationale": rationale.strip(),
