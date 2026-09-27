@@ -62,8 +62,9 @@ COMMITMENT_PATTERNS = [
 
 
 class ConversationManager:
-    def __init__(self, context_store):
+    def __init__(self, context_store, llm_client=None):
         self.context_store = context_store
+        self.llm_client = llm_client
 
     def is_auto_reply(self, message: str) -> bool:
         """Check if message matches typical canned auto-reply signatures."""
@@ -118,7 +119,9 @@ class ConversationManager:
         owner_name = merchant.get("identity", {}).get("owner_first_name") or "there"
         merchant_biz = merchant.get("identity", {}).get("name", "your business")
 
-        if conv.get("state") in {"ended_hostile", "ended_customer_reply", "ended_auto_reply"}:
+        if conv.get("state") in {
+            "ended_hostile", "ended_customer_reply", "ended_auto_reply", "ended_model"
+        }:
             return {
                 "action": "end",
                 "cta": "none",
@@ -175,6 +178,57 @@ class ConversationManager:
                 "cta": "none",
                 "rationale": "Merchant expressed frustration or opted out. Conversation closed without another promotional message."
             }
+
+        if self.llm_client and self.llm_client.enabled:
+            trigger_id = conv.get("trigger_id")
+            trigger_record = (
+                self.context_store.get_trigger(trigger_id)
+                if isinstance(trigger_id, str) else None
+            )
+            trigger = trigger_record.get("payload") if trigger_record else None
+            customer = (
+                self.context_store.get_customer(customer_id)
+                if isinstance(customer_id, str) else None
+            )
+            result = self.llm_client.generate_reply(
+                merchant=merchant,
+                trigger=trigger,
+                customer=customer,
+                conversation=conv,
+                message=message,
+                from_role=from_role,
+                turn_number=turn_number,
+            )
+            turns = conv.get("turns", []) + [{
+                "role": from_role,
+                "body": message,
+                "turn_number": turn_number,
+            }]
+            updates = {
+                "turns": turns,
+                "auto_reply_count": 0,
+                "msg_history": msg_history + [message],
+            }
+            if result["action"] == "send":
+                assistant_turn = {
+                    "role": "vera",
+                    "body": result["body"],
+                    "turn_number": turn_number,
+                }
+                turns.append(assistant_turn)
+                updates.update({
+                    "turns": turns,
+                    "last_sent_body": result["body"],
+                    "last_action": {
+                        "action": "send",
+                        "body": result["body"],
+                        "cta": result["cta"],
+                    },
+                })
+            elif result["action"] == "end":
+                updates["state"] = "ended_model"
+            self.context_store.update_conversation(conv_id, updates)
+            return result
 
         if from_role == "customer":
             self.context_store.update_conversation(conv_id, {

@@ -15,6 +15,7 @@ import threading
 from urllib import request as urlrequest, error as urlerror
 from pathlib import Path
 
+import server
 from server import app, store
 
 
@@ -39,6 +40,9 @@ def http_req(method: str, path: str, body_dict: dict = None):
 
 
 def run_tests():
+    # Keep this suite offline and deterministic even when a developer has a local key.
+    server.llm_client.api_key = None
+
     print("\n" + "=" * 60)
     print("RUNNING VERA BOT LOCAL TEST SUITE")
     print("=" * 60 + "\n")

@@ -16,12 +16,14 @@ import sys
 import json
 import logging
 import uuid
+import time
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 
 from context_store import ContextStore
 from conversation_manager import ConversationManager
 from bot import compose
+from llm_client import GeminiClient, ModelError
 
 # Configure logging
 logging.basicConfig(
@@ -34,14 +36,20 @@ app = Flask(__name__)
 
 # Singletons
 store = ContextStore()
-conv_manager = ConversationManager(store)
+llm_client = GeminiClient()
+conv_manager = ConversationManager(store, llm_client)
 
 # Metadata configuration
 METADATA = {
     "team_name": os.environ.get("VERA_TEAM_NAME", "Team VeraCraft"),
     "team_members": [os.environ.get("VERA_CANDIDATE_NAME", "Sambhav Mishra")],
-    "model": "hybrid-deterministic-vera",
-    "approach": "4-context deterministic signal grounding with adaptive multi-turn conversation routing",
+    "model": llm_client.model if llm_client.enabled else "hybrid-template-vera",
+    "approach": (
+        "Gemini structured generation grounded in four contexts with deterministic consent, "
+        "routing, and conversation safety checks"
+        if llm_client.enabled else
+        "Deterministic four-context composition with adaptive multi-turn conversation routing"
+    ),
     "contact_email": os.environ.get("VERA_CONTACT_EMAIL", "sambhavmishra234@gmail.com"),
     "version": "1.0.0",
     "submitted_at": os.environ.get(
@@ -132,6 +140,7 @@ def tick():
         return jsonify({"error": "available_triggers_must_be_a_list_of_ids"}), 400
 
     actions = []
+    model_deadline = time.monotonic() + 24
 
     for tid in available_triggers:
         if len(actions) >= 20:
@@ -181,6 +190,23 @@ def tick():
         if not composed.get("body"):
             logger.debug(f"No safe message available for trigger {tid}, skipping")
             continue
+        if llm_client.enabled:
+            remaining = model_deadline - time.monotonic()
+            if remaining < 1:
+                logger.warning("Tick model time budget exhausted; remaining triggers were skipped.")
+                break
+            try:
+                composed = llm_client.compose_message(
+                    category,
+                    merchant,
+                    trigger,
+                    customer,
+                    composed,
+                    timeout_seconds=min(llm_client.timeout_seconds, remaining),
+                )
+            except ModelError as error:
+                logger.warning("Gemini composition failed for trigger %s: %s", tid, error)
+                continue
         conv_id = f"conv_{uuid.uuid4().hex}"
 
         # Keep the first outbound inside a declared message-template contract.
@@ -250,14 +276,18 @@ def reply():
             or isinstance(turn_number, bool) or not isinstance(turn_number, int) or turn_number < 1):
         return jsonify({"error": "missing_or_invalid_reply_fields"}), 400
 
-    result = conv_manager.handle_reply(
-        conv_id=conv_id,
-        merchant_id=merchant_id,
-        customer_id=customer_id,
-        from_role=from_role,
-        message=message,
-        turn_number=turn_number
-    )
+    try:
+        result = conv_manager.handle_reply(
+            conv_id=conv_id,
+            merchant_id=merchant_id,
+            customer_id=customer_id,
+            from_role=from_role,
+            message=message,
+            turn_number=turn_number
+        )
+    except ModelError as error:
+        logger.warning("Gemini reply generation failed for conversation %s: %s", conv_id, error)
+        return jsonify({"error": "model_unavailable", "detail": str(error)}), 503
 
     return jsonify(result), 200
 
