@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: veracraft-bot
+    name: veracraft-bot-gemini
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt

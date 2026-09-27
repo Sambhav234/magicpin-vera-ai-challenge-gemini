@@ -81,7 +81,7 @@ The repository includes `render.yaml`, `requirements.txt`, and `.python-version`
 
 1. Push the project to a GitHub repository.
 2. In Render, choose **New + → Blueprint** and connect that repository.
-3. Review the `veracraft-bot` web service. The Blueprint defaults to Render's free plan.
+3. Review the `veracraft-bot-gemini` web service. The Blueprint defaults to Render's free plan.
    Free instances can spin down when idle; upgrade to a paid plan before evaluation if
    the challenge requires uninterrupted availability.
 4. Enter `VERA_TEAM_NAME`, `VERA_CANDIDATE_NAME`, `VERA_CONTACT_EMAIL`, and your Gemini
